@@ -1,5 +1,6 @@
 import pytest
 import numpy as np
+from sklearn.linear_model import LogisticRegression
 from src.evaluation.metrics import EvaluationMetrics
 from src.evaluation.validation import ValidationEngine
 from src.evaluation.comparison import ModelComparator
@@ -20,7 +21,24 @@ def test_metrics_regression():
 
 def test_model_comparator():
     comp = ModelComparator("f1")
-    comp.add_result("model_a", {"f1": 0.8}, 1.2)
-    comp.add_result("model_b", {"f1": 0.9}, 2.5)
+    comp.add_result({"model_name": "model_a", "metrics": {"f1": 0.8}, "runtime_seconds": 1.2})
+    comp.add_result({"model_name": "model_b", "metrics": {"f1": 0.9}, "runtime_seconds": 2.5})
     best = comp.get_best_model()
     assert best["model_name"] == "model_b"
+
+def test_validation_engine_cross_validate():
+    X = np.random.randn(30, 4)
+    y = np.random.choice([0, 1], size=30)
+    
+    engine = ValidationEngine(task_type="binary_classification", n_splits=3)
+    res = engine.cross_validate(
+        model=LogisticRegression(),
+        model_name="Logistic Regression",
+        X_train=X,
+        y_train=y,
+        primary_metric="accuracy"
+    )
+    
+    assert res["status"] == "completed"
+    assert "accuracy" in res["metrics"]
+    assert res["cv_mean"] >= 0
