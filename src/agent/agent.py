@@ -8,6 +8,7 @@ from src.agent.decisions import AgentDecision, AgentAction
 from src.agent.prompts import (
     SYSTEM_PROMPT,
     ANALYSIS_DECISION_PROMPT,
+    MODEL_SELECTION_STRATEGY_PROMPT,
     TUNING_DECISION_PROMPT,
     FINAL_RECOMMENDATION_PROMPT
 )
@@ -22,7 +23,10 @@ class LLMClient:
     def __init__(self):
         self.gemini_keys = AppConfig.get_gemini_keys()
         self.current_key_idx = 0
-        self.gemini_models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+        preferred_model = AppConfig.get_gemini_model()
+        models = [preferred_model, "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash"]
+        # Deduplicate while preserving order
+        self.gemini_models = list(dict.fromkeys(models))
         self.ollama_base_url = AppConfig.get_ollama_base_url()
         self.ollama_models = AppConfig.get_ollama_models()
 
@@ -38,13 +42,13 @@ class LLMClient:
                 active_key = self.gemini_keys[self.current_key_idx]
                 key_label = f"GEMINI_KEY_{self.current_key_idx + 1}"
                 
-                # Check authentication format
-                is_bearer = active_key.startswith("AQ.") or active_key.startswith("ya29.")
+                # Check authentication format: OAuth2 bearer tokens start with ya29.
+                is_oauth_bearer = active_key.startswith("ya29.")
                 
                 for model in self.gemini_models:
                     try:
                         logger.info(f"LLM_REQUEST_GEMINI | Using {key_label} | Model: {model}")
-                        if is_bearer:
+                        if is_oauth_bearer:
                             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
                             headers = {
                                 "Content-Type": "application/json",
@@ -52,7 +56,10 @@ class LLMClient:
                             }
                         else:
                             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={active_key}"
-                            headers = {"Content-Type": "application/json"}
+                            headers = {
+                                "Content-Type": "application/json",
+                                "x-goog-api-key": active_key
+                            }
                             
                         payload = {
                             "contents": [{"role": "user", "parts": [{"text": full_prompt}]}],
@@ -62,7 +69,7 @@ class LLMClient:
                             }
                         }
                         
-                        response = requests.post(url, headers=headers, json=payload, timeout=10)
+                        response = requests.post(url, headers=headers, json=payload, timeout=15)
                         if response.status_code == 200:
                             data = response.json()
                             text_content = data["candidates"][0]["content"]["parts"][0]["text"]
@@ -70,12 +77,14 @@ class LLMClient:
                             if parsed:
                                 logger.info(f"LLM_RESPONSE_GEMINI_SUCCESS | {key_label} ({model})")
                                 return parsed
-                        elif response.status_code in [429, 403]:
-                            logger.warning(f"GEMINI_LIMIT | Status {response.status_code} on {key_label}. Rotating key...")
-                            break  # Rotate key
-                        elif response.status_code in [401, 404]:
-                            logger.warning(f"GEMINI_AUTH/MODEL_ERROR | Status {response.status_code} for {model}")
-                            continue  # Try next model or rotate
+                        elif response.status_code in [401, 403, 429]:
+                            # 401: Invalid key, 403: Quota/Forbidden, 429: Rate limit -> Rotate to next key immediately
+                            logger.warning(f"GEMINI_LIMIT_OR_AUTH | Status {response.status_code} on {key_label}. Rotating to next key...")
+                            break
+                        elif response.status_code == 404:
+                            # Model not supported on this endpoint -> try next model for current key
+                            logger.info(f"GEMINI_MODEL_UNAVAILABLE | Status 404 for {model}")
+                            continue
                     except Exception as e:
                         logger.warning(f"GEMINI_CALL_ERROR | {key_label}: {e}")
                         break
@@ -143,6 +152,16 @@ class BaseAgent:
     def select_analysis_decision(self, profile: Dict[str, Any], warnings: List[str], target_candidates: List[str]) -> AgentDecision:
         raise NotImplementedError
 
+    def select_model_strategy(
+        self,
+        profile: Dict[str, Any],
+        feature_summary: Dict[str, Any],
+        problem_type: str,
+        primary_metric: str,
+        train_shape: tuple
+    ) -> AgentDecision:
+        raise NotImplementedError
+
     def select_tuning_decision(self, baseline_results: List[Dict[str, Any]], primary_metric: str) -> AgentDecision:
         raise NotImplementedError
 
@@ -159,6 +178,9 @@ class MockAgent(BaseAgent):
         task_type = "binary_classification"
         metric = "f1" if any("imbalance" in w.lower() for w in warnings) else "accuracy"
         
+        has_outliers = any("outlier" in w.lower() for w in warnings)
+        scaling_choice = "robust" if has_outliers else "standard"
+        
         exclude_cols = []
         for w in warnings:
             if "likely identifier" in w.lower() or "constant" in w.lower():
@@ -168,7 +190,7 @@ class MockAgent(BaseAgent):
 
         return AgentDecision(
             observation=f"Dataset contains {summary['rows']} observations across {summary['columns']} features with {len(warnings)} data quality flags.",
-            decision=f"Assign target to '{target}', optimize for '{metric.upper()}', and exclude non-predictive columns {exclude_cols}.",
+            decision=f"Assign target to '{target}', optimize for '{metric.upper()}', apply {scaling_choice} scaling and exclude non-predictive columns {exclude_cols}.",
             next_action=AgentAction.PREPROCESS_DATA,
             reason="Prioritizing F1-score mitigates minority class misclassification risks; dropping identifier/constant features prevents memorization.",
             confidence=0.98,
@@ -178,10 +200,46 @@ class MockAgent(BaseAgent):
                 "primary_metric": metric,
                 "exclude_columns": exclude_cols,
                 "numerical_imputation": "median",
-                "scaling": "standard",
+                "scaling": scaling_choice,
                 "categorical_encoding": "one_hot",
                 "use_class_weights": True
             }
+        )
+
+    def select_model_strategy(
+        self,
+        profile: Dict[str, Any],
+        feature_summary: Dict[str, Any],
+        problem_type: str,
+        primary_metric: str,
+        train_shape: tuple
+    ) -> AgentDecision:
+        if "classification" in problem_type:
+            candidates = [
+                "decision_tree",
+                "random_forest",
+                "gradient_boosting",
+                "svm",
+                "voting_ensemble",
+                "stacking_ensemble"
+            ]
+        else:
+            candidates = [
+                "decision_tree",
+                "random_forest",
+                "gradient_boosting",
+                "ridge",
+                "voting_ensemble",
+                "stacking_ensemble"
+            ]
+
+        return AgentDecision(
+            observation=f"Feature space preprocessed to {feature_summary.get('total_engineered_features', train_shape[1])} features across {train_shape[0]} training samples.",
+            decision=f"Deploy a diverse tournament of candidate models ({', '.join(candidates)}).",
+            next_action=AgentAction.RUN_BASELINES,
+            reason="Evaluating single interpretable trees, bagging (Random Forest), boosting (Gradient Boosting), kernel SVMs, and multi-model stacking/voting ensembles ensures comprehensive coverage of linear and non-linear patterns.",
+            confidence=0.95,
+            parameters={"selected_candidates": candidates}
         )
 
     def select_tuning_decision(self, baseline_results: List[Dict[str, Any]], primary_metric: str) -> AgentDecision:
@@ -216,9 +274,20 @@ class LLMAgent(BaseAgent):
 
     def select_analysis_decision(self, profile: Dict[str, Any], warnings: List[str], target_candidates: List[str]) -> AgentDecision:
         summary = profile["summary"]
+        cols_profile = profile.get("columns", {})
         warnings_str = "\n".join([f"- {w}" for w in warnings]) if warnings else "None"
         default_target = target_candidates[0] if target_candidates else "target"
         
+        # Build concise statistical details per column
+        col_lines = []
+        for col_name, stats in list(cols_profile.items())[:12]:
+            dtype = stats.get("dtype", "unknown")
+            nulls = stats.get("null_count", 0)
+            nunique = stats.get("unique_count", 0)
+            outliers = stats.get("outliers_iqr_count", 0)
+            col_lines.append(f"- {col_name} ({dtype}): {nunique} unique values, {nulls} nulls, {outliers} IQR outliers")
+        column_details_str = "\n".join(col_lines) if col_lines else "Standard tabular features."
+
         prompt = ANALYSIS_DECISION_PROMPT.format(
             rows=summary.get("rows", 0),
             columns=summary.get("columns", 0),
@@ -226,6 +295,7 @@ class LLMAgent(BaseAgent):
             categorical_features=summary.get("categorical_features_count", 0),
             missing_pct=round(summary.get("missing_percentage", 0.0), 2),
             target_candidates=", ".join(target_candidates),
+            column_details=column_details_str,
             warnings=warnings_str,
             default_target=default_target,
             detected_problem=self.state.problem.get("task", "binary_classification")
@@ -235,9 +305,37 @@ class LLMAgent(BaseAgent):
         if data:
             return self._to_decision(data, AgentAction.PREPROCESS_DATA)
         
-        # Heuristic fallback if both tiers are uncontactable
         print("[Agent] Notice: External LLMs offline. Using deterministic AutoML reasoning engine.")
         return self._fallback_agent.select_analysis_decision(profile, warnings, target_candidates)
+
+    def select_model_strategy(
+        self,
+        profile: Dict[str, Any],
+        feature_summary: Dict[str, Any],
+        problem_type: str,
+        primary_metric: str,
+        train_shape: tuple
+    ) -> AgentDecision:
+        eda_notes = f"{profile['summary'].get('rows', 0)} rows, {feature_summary.get('total_engineered_features', train_shape[1])} features after encoding."
+        if self.state.data_quality.get("warnings"):
+            eda_notes += " Quality flags: " + "; ".join(self.state.data_quality["warnings"][:3])
+
+        prompt = MODEL_SELECTION_STRATEGY_PROMPT.format(
+            problem_type=problem_type,
+            primary_metric=primary_metric,
+            train_rows=train_shape[0],
+            feature_count=feature_summary.get("total_engineered_features", train_shape[1]),
+            scaling_applied=feature_summary.get("scaling_applied", "standard"),
+            encoding_applied=feature_summary.get("encoding_applied", "one_hot"),
+            eda_notes=eda_notes
+        )
+
+        data = self.client.generate_decision(prompt, task_tier="major")
+        if data:
+            return self._to_decision(data, AgentAction.RUN_BASELINES)
+
+        print("[Agent] Notice: External LLMs offline. Using deterministic AutoML reasoning engine.")
+        return self._fallback_agent.select_model_strategy(profile, feature_summary, problem_type, primary_metric, train_shape)
 
     def select_tuning_decision(self, baseline_results: List[Dict[str, Any]], primary_metric: str) -> AgentDecision:
         results_rows = []
