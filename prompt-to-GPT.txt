@@ -1,0 +1,12 @@
+Create a synthetic dataset named `synthetic_data.csv` for testing an AutoML pipeline. It should be a classification problem dataset with the following characteristics to test validation rules:
+
+1. Approximately 100 rows and 8 columns.
+2. A binary target column named `churn` containing values 'Yes' and 'No' with class imbalance (e.g. 90% 'No', 10% 'Yes').
+3. A numerical feature column named `age` with a few missing values (e.g. 5% missing).
+4. A numerical feature column named `tenure` with some values that could be considered outliers (e.g. negative values or values exceeding 200).
+5. A high-cardinality identifier column named `customer_id` with 100% unique alphanumeric codes.
+6. A constant numerical column named `status_code` containing only the value 1 across all rows.
+7. A column named `empty_notes` that is completely empty (all missing values).
+8. A couple of duplicate rows.
+
+Output the dataset as pure, copyable CSV text.
