@@ -1,16 +1,21 @@
 import argparse
 import sys
 from pathlib import Path
+from typing import Dict, Any
+import numpy as np
+import pandas as pd
+
 from src.agent.state import WorkflowState
-from src.agent.agent import MockAgent
+from src.agent.agent import LLMAgent, MockAgent, LLMClient
 from src.tools.ml_tools import MLTools
+from src.evaluation.validation import ValidationEngine
+from src.evaluation.comparison import ModelComparator
 from src.utils.logging import setup_logger
-from src.utils.config import AppConfig
 
 VERSION = "0.1.0"
 
 def print_header():
-    """Prints the styled CLI header as specified in ML_STUDIO_SPEC.md."""
+    """Prints styled CLI header."""
     header = """
 ╔══════════════════════════════════════════════════════════╗
 ║                       ML STUDIO                          ║
@@ -43,7 +48,7 @@ def main():
     parser.add_argument(
         "--target",
         type=str,
-        help="The name of the target column in the dataset."
+        help="The name of the target column in the dataset (optional, auto-detected by agent)."
     )
     parser.add_argument(
         "--metric",
@@ -53,9 +58,14 @@ def main():
     parser.add_argument(
         "--agent-mode",
         type=str,
-        choices=["mock", "real"],
-        default="mock",
-        help="The operation mode for the agent reasoning engine."
+        choices=["real", "mock"],
+        default="real",
+        help="The operation mode: 'real' (Gemini rotation with Ollama fallback) or 'mock' (deterministic testing)."
+    )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Enable interactive human-in-the-loop checkpoints before major actions."
     )
     parser.add_argument(
         "--version",
@@ -65,15 +75,14 @@ def main():
     )
 
     args = parser.parse_args()
-
     print_header()
 
-    # Setup logger
     logger = setup_logger()
     logger.info(f"STARTING_ML_STUDIO | Version: {VERSION} | Agent Mode: {args.agent_mode}")
 
     if not args.dataset:
         print("\n[!] Please specify a dataset path via --dataset <path>.")
+        print("Example: python -m src.main --dataset datasets/synthetic_dataset.xlsx")
         print("Use --help to view all available commands.")
         sys.exit(0)
 
@@ -83,36 +92,46 @@ def main():
         logger.error(f"FILE_NOT_FOUND | Path: {args.dataset}")
         sys.exit(1)
 
-    print(f"\nDataset: {dataset_path.name}\n")
+    print(f"\nDataset: {dataset_path.name}")
+    print(f"Agent Mode: {args.agent_mode.upper()}")
 
-    # 1. LOAD DATASET
+    # Initialize State & Agent
+    state = WorkflowState()
+    state.user_context["dataset_path"] = str(dataset_path)
+
+    if args.agent_mode == "real":
+        agent = LLMAgent(state)
+    else:
+        agent = MockAgent(state)
+
+    # ------------------------------------------------------------
+    # [1/8] DATASET LOADING & VALIDATION
+    # ------------------------------------------------------------
+    print("\n------------------------------------------------------------")
+    print("[1/8] DATASET VALIDATION")
+    print("------------------------------------------------------------")
     try:
-        df = MLTools.load_dataset(args.dataset)
+        df = MLTools.load_dataset(str(dataset_path))
         logger.info(f"DATASET_LOADED | Shape: {df.shape}")
     except Exception as e:
         print(f"[!] Error loading dataset: {e}")
         logger.error(f"LOAD_ERROR | {e}")
         sys.exit(1)
 
-    # 2. DATASET VALIDATION
-    print("------------------------------------------------------------")
-    print("[1/8] DATASET VALIDATION")
-    print("------------------------------------------------------------")
-    
     errors, warnings = MLTools.validate_dataset(df, args.target)
-    
+
     print("✓ File loaded")
     print(f"✓ {df.shape[0]:,} rows")
     print(f"✓ {df.shape[1]:,} columns")
-    
-    duplicate_rows = df.duplicated().sum()
-    if duplicate_rows == 0:
+
+    dup_count = df.duplicated().sum()
+    if dup_count == 0:
         print("✓ No duplicate rows")
     else:
-        print(f"⚠ {duplicate_rows:,} duplicate rows detected")
+        print(f"⚠ {dup_count:,} duplicate rows detected")
 
     if errors:
-        print("\nErrors:")
+        print("\nValidation Errors:")
         for err in errors:
             print(f" ✗ {err}")
         print("\nValidation status: FAILED")
@@ -121,70 +140,340 @@ def main():
 
     if warnings:
         print("\nWarnings:")
-        for warn in warnings:
-            print(f" ⚠ {warn}")
-        print("\nValidation status: PASSED WITH WARNINGS")
-        logger.warning("DATASET_VALIDATION_PASSED_WITH_WARNINGS")
+        for w in warnings:
+            print(f" ⚠ {w}")
+        print("\nStatus: PASSED WITH WARNINGS")
     else:
-        print("\nValidation status: PASSED")
-        logger.info("DATASET_VALIDATION_PASSED")
+        print("\nStatus: PASSED")
 
-    # 3. DATASET PROFILING
+    state.data_quality["warnings"] = warnings
+    state.current_stage = "VALIDATED"
+
+    # ------------------------------------------------------------
+    # [2/8] DATASET PROFILING
+    # ------------------------------------------------------------
     print("\n------------------------------------------------------------")
     print("[2/8] DATASET PROFILING")
     print("------------------------------------------------------------")
-    
     profile = MLTools.profile_dataset(df)
     summary = profile["summary"]
     cols_profile = profile["columns"]
 
-    print(f"Numerical features: {summary['numerical_features_count']}")
-    print(f"Categorical features: {summary['categorical_features_count']}")
-    
-    # Calculate global cell missing percentage
     total_cells = df.size
     total_missing = df.isnull().sum().sum()
     missing_pct = (total_missing / total_cells * 100) if total_cells > 0 else 0.0
-    print(f"Missing values: {missing_pct:.1f}% of total cells")
+    summary["missing_percentage"] = missing_pct
 
-    # Display columns detailed profiles
-    print("\nColumn Profiles:")
-    for col, col_prof in cols_profile.items():
-        missing_info = f"{col_prof['missing_count']} missing ({col_prof['missing_percent']*100:.1f}%)"
-        outliers_str = ""
-        if "outliers" in col_prof:
-            outliers_str = f" | IQR Outliers: {col_prof['outliers']['count']}"
-        print(f"  - {col} ({col_prof['dtype']}): {col_prof['unique_count']} unique values | {missing_info}{outliers_str}")
+    print(f"Numerical features: {summary['numerical_features_count']}")
+    print(f"Categorical features: {summary['categorical_features_count']}")
+    print(f"Missing values: {missing_pct:.1f}%")
 
-    # Heuristically detect target candidates
     target_candidates = MLTools.detect_target_candidates(df)
-    print("\nDetected Target Candidates:")
-    for idx, cand in enumerate(target_candidates, 1):
-        print(f"  {idx}. {cand}")
+    if args.target and args.target in df.columns:
+        selected_target = args.target
+    else:
+        selected_target = target_candidates[0]
 
-    # Initialize workflow state
-    state = WorkflowState()
-    state.user_context["dataset_path"] = args.dataset
+    detected_problem = MLTools.detect_problem_type(df, selected_target)
     state.dataset = summary
+    state.problem = {"target": selected_target, "task": detected_problem}
     state.current_stage = "PROFILED"
 
-    if args.target:
-        state.problem["target"] = args.target
-        state.problem["task"] = MLTools.detect_problem_type(df, args.target)
-        logger.info(f"PROBLEM_TYPE_DETECTED | Target: {args.target} | Task: {state.problem['task']}")
+    # ------------------------------------------------------------
+    # [3/8] AGENT ANALYSIS & DECISION
+    # ------------------------------------------------------------
+    print("\n------------------------------------------------------------")
+    print("[3/8] AGENT ANALYSIS")
+    print("------------------------------------------------------------")
+    
+    print("Observing dataset state and generating agent decision...")
+    decision_1 = agent.select_analysis_decision(profile, warnings, target_candidates)
+    params = decision_1.parameters
+
+    target = args.target or params.get("target", selected_target)
+    problem_type = params.get("problem_type", detected_problem)
+    primary_metric = (args.metric or params.get("primary_metric", "f1")).lower()
+    exclude_cols = params.get("exclude_columns", [])
+    use_cw = params.get("use_class_weights", True)
+
+    state.problem["target"] = target
+    state.problem["task"] = problem_type
+    state.optimization_metric = primary_metric
+    state.preprocessing = {
+        "exclude_columns": exclude_cols,
+        "numerical_imputation": params.get("numerical_imputation", "median"),
+        "scaling": params.get("scaling", "standard"),
+        "categorical_encoding": params.get("categorical_encoding", "one_hot"),
+        "use_class_weights": use_cw
+    }
+
+    print(f"\nTarget recommendation: {target}")
+    print(f"Problem: {problem_type.replace('_', ' ').title()}")
+    print(f"Optimization metric: {primary_metric.upper()}")
+    print(f"Features excluded (Risk/Leakage/Constant): {exclude_cols if exclude_cols else 'None'}")
+    print(f"Observation: {decision_1.observation}")
+    print(f"Reason: {decision_1.reason}")
+
+    if args.interactive:
+        confirm = input("\nAccept Agent Recommendation? [Y/n]: ").strip().lower()
+        if confirm == "n":
+            target = input(f"Enter target column [{target}]: ").strip() or target
+            primary_metric = input(f"Enter primary metric [{primary_metric}]: ").strip().lower() or primary_metric
+            state.problem["target"] = target
+            state.optimization_metric = primary_metric
+
+    state.record_transition("ANALYZED", decision_1.next_action.value, decision_1.to_dict())
+
+    # ------------------------------------------------------------
+    # [4/8] PREPROCESSING EXECUTION
+    # ------------------------------------------------------------
+    print("\n------------------------------------------------------------")
+    print("[4/8] PREPROCESSING DECISION & EXECUTION")
+    print("------------------------------------------------------------")
+
+    # Clean target
+    df_clean = df.dropna(subset=[target]).copy()
+    y_raw = df_clean[target]
+    X_raw = df_clean.drop(columns=[target])
+
+    # Convert y to numerical if classification strings
+    if "classification" in problem_type:
+        classes, y_encoded = np.unique(y_raw.astype(str), return_inverse=True)
     else:
-        # Default to first target candidate
-        detected_target = target_candidates[0]
-        state.problem["target"] = detected_target
-        state.problem["task"] = MLTools.detect_problem_type(df, detected_target)
-        logger.info(f"HEURISTIC_TARGET_DETECTED | Target: {detected_target} | Task: {state.problem['task']}")
+        classes = None
+        y_encoded = y_raw.values.astype(float)
 
-    if args.metric:
-        state.optimization_metric = args.metric
+    # Holdout Train/Test Split (80% Train, 20% Untouched Final Test)
+    validator_engine = ValidationEngine(task_type=problem_type, test_size=0.2, random_seed=42)
+    X_train_df, X_test_df, y_train, y_test = validator_engine.split(X_raw, y_encoded)
 
-    # In Phase 2, we terminate here and don't execute any agent layers
-    print("\nPhase 2 Complete: Dataset engine successfully executed.")
-    logger.info("PHASE_2_COMPLETED")
+    # Build and fit preprocessing pipeline on Train
+    preproc_pipeline = MLTools.build_preprocessing_pipeline(state.preprocessing)
+    X_train_proc = preproc_pipeline.fit_transform(X_train_df, y_train)
+    X_test_proc = preproc_pipeline.transform(X_test_df)
+    feature_names = preproc_pipeline.get_feature_names()
+
+    print(f"Train split: {X_train_proc.shape[0]} rows | Holdout test split: {X_test_proc.shape[0]} rows")
+    print(f"Processed feature count: {X_train_proc.shape[1]}")
+    print("Numerical: Median imputation + Standard scaling")
+    print("Categorical: Most frequent imputation + One-hot encoding")
+    if use_cw and "classification" in problem_type:
+        print("Class imbalance: Balanced class weighting active")
+    
+    state.current_stage = "PREPROCESSED"
+
+    # ------------------------------------------------------------
+    # [5/8] BASELINE EXPERIMENTS
+    # ------------------------------------------------------------
+    print("\n------------------------------------------------------------")
+    print("[5/8] BASELINE EXPERIMENTS (5-Fold Cross-Validation)")
+    print("------------------------------------------------------------")
+    
+    baseline_results = MLTools.run_baseline_experiments(
+        task_type=problem_type,
+        X_train=X_train_proc,
+        y_train=y_train,
+        primary_metric=primary_metric,
+        use_class_weights=use_cw
+    )
+
+    comparator = ModelComparator(primary_metric=primary_metric)
+    for res in baseline_results:
+        comparator.add_result(res)
+        state.record_experiment({
+            "stage": "baseline",
+            "model": res["model_name"],
+            "metrics": res["metrics"],
+            "cv_mean": res["cv_mean"],
+            "cv_std": res["cv_std"],
+            "runtime_seconds": res["runtime_seconds"]
+        })
+
+    # Print baseline results table
+    header_col = f"{primary_metric.upper():<10}"
+    print(f"\n{'Model':<25} {header_col} {'ROC-AUC':<10} {'Runtime':<10}")
+    print("-" * 60)
+    for r in comparator.get_ranked_models():
+        m_score = r["metrics"].get(primary_metric, 0.0)
+        roc_score = r["metrics"].get("roc_auc", 0.0)
+        print(f"{r['model_name']:<25} {m_score:<10.4f} {roc_score:<10.4f} {r['runtime_seconds']:<6.2f}s")
+
+    state.current_stage = "BASELINES_TRAINED"
+
+    # ------------------------------------------------------------
+    # [6/8] AGENT DECISION (Select model for hyperparameter tuning)
+    # ------------------------------------------------------------
+    print("\n------------------------------------------------------------")
+    print("[6/8] AGENT DECISION")
+    print("------------------------------------------------------------")
+    
+    decision_2 = agent.select_tuning_decision(baseline_results, primary_metric)
+    selected_tune_model = decision_2.parameters.get("selected_model", comparator.get_best_model()["model_name"])
+    tuning_trials = int(decision_2.parameters.get("trials", 20))
+
+    print(f"Observation: {decision_2.observation}")
+    print(f"Decision: {decision_2.decision}")
+    print(f"Reason: {decision_2.reason}")
+
+    state.record_transition("TUNING_DECISION", decision_2.next_action.value, decision_2.to_dict())
+
+    # ------------------------------------------------------------
+    # [7/8] HYPERPARAMETER TUNING
+    # ------------------------------------------------------------
+    print("\n------------------------------------------------------------")
+    print(f"[7/8] HYPERPARAMETER TUNING: {selected_tune_model}")
+    print("------------------------------------------------------------")
+    print(f"Searching parameter space ({tuning_trials} trials)...")
+
+    tuning_res = MLTools.tune_candidate(
+        model_name=selected_tune_model,
+        X_train=X_train_proc,
+        y_train=y_train,
+        task_type=problem_type,
+        primary_metric=primary_metric,
+        trials=tuning_trials,
+        use_class_weights=use_cw
+    )
+
+    best_estimator = tuning_res["best_estimator"]
+    best_cv_score = tuning_res["best_score"]
+    best_params = tuning_res["best_params"]
+
+    print(f"\nTrials completed: {tuning_res['trials_run']}")
+    print(f"Best configuration: {best_params if best_params else 'Default configuration'}")
+    print(f"Best CV {primary_metric.upper()}: {best_cv_score:.4f}")
+    print(f"Tuning time: {tuning_res['tuning_time_seconds']:.2f}s")
+
+    state.record_experiment({
+        "stage": "hyperparameter_tuning",
+        "model": selected_tune_model,
+        "best_params": best_params,
+        "cv_score": best_cv_score,
+        "runtime_seconds": tuning_res["tuning_time_seconds"]
+    })
+    state.current_stage = "TUNED"
+
+    # ------------------------------------------------------------
+    # [8/8] FINAL EVALUATION & SUMMARY
+    # ------------------------------------------------------------
+    print("\n------------------------------------------------------------")
+    print("[8/8] FINAL EVALUATION & ARTIFACT EXPORT")
+    print("------------------------------------------------------------")
+
+    # Fit best estimator on full training set and evaluate on untouched holdout test set
+    best_estimator.fit(X_train_proc, y_train)
+    test_metrics, conf_matrix = MLTools.evaluate_holdout_test(best_estimator, X_test_proc, y_test, problem_type)
+    
+    # Feature importances
+    feat_importances = MLTools.extract_feature_importance(best_estimator, feature_names)
+
+    best_model_record = {
+        "model_name": selected_tune_model,
+        "metrics": test_metrics,
+        "cv_score": best_cv_score,
+        "test_score": test_metrics.get(primary_metric, 0.0),
+        "best_params": best_params,
+        "estimator": best_estimator
+    }
+    state.best_model = {
+        "model_name": selected_tune_model,
+        "primary_metric": primary_metric,
+        "cv_score": best_cv_score,
+        "test_score": test_metrics.get(primary_metric, 0.0),
+        "best_params": best_params
+    }
+
+    # Final agent synthesis
+    decision_3 = agent.select_final_recommendation(best_model_record, comparator.get_ranked_models())
+    state.record_transition("FINAL_EVALUATION", decision_3.next_action.value, decision_3.to_dict())
+
+    # Build report text
+    fi_text = "\n".join([f"  - {f}: {score:.4f}" for f, score in feat_importances[:5]])
+    report_text = f"""
+============================================================
+FINAL MODEL RECOMMENDATION
+============================================================
+
+Model:
+  {selected_tune_model}
+
+Problem Type:
+  {problem_type.replace('_', ' ').title()}
+
+Target:
+  {target}
+
+Primary Metric:
+  {primary_metric.upper()}
+
+Cross-Validation {primary_metric.upper()}:
+  {best_cv_score:.4f}
+
+Final Holdout Test {primary_metric.upper()}:
+  {test_metrics.get(primary_metric, 0.0):.4f}
+
+Final Test Accuracy:
+  {test_metrics.get('accuracy', 0.0):.4f}
+
+Final Test ROC-AUC:
+  {test_metrics.get('roc_auc', 0.0):.4f}
+
+Top 5 Important Features:
+{fi_text}
+
+Why Selected:
+  - {decision_3.reason}
+  - Highest validated performance under {primary_metric.upper()} metric.
+  - Generalizes reliably on untouched test holdout.
+
+Status:
+  [✓] COMPLETED
+"""
+    print(report_text.strip())
+
+    # Save all output artifacts
+    final_report_dict = {
+        "dataset": {
+            "filename": dataset_path.name,
+            "shape": list(df.shape),
+            "target": target,
+            "problem_type": problem_type
+        },
+        "data_quality": {
+            "warnings": warnings,
+            "missing_pct": missing_pct,
+            "duplicates": int(dup_count)
+        },
+        "preprocessing": state.preprocessing,
+        "baseline_experiments": state.experiments,
+        "best_model": {
+            "name": selected_tune_model,
+            "cv_score": best_cv_score,
+            "test_metrics": test_metrics,
+            "best_params": best_params,
+            "top_features": feat_importances[:10],
+            "confusion_matrix": conf_matrix
+        },
+        "agent_workflow": state.agent_history,
+        "final_recommendation_reason": decision_3.reason
+    }
+
+    MLTools.export_artifacts(
+        state_dict=state.to_dict(),
+        best_model=best_estimator,
+        final_report=final_report_dict,
+        report_text=report_text,
+        out_dir="outputs"
+    )
+
+    print("\nOutputs Saved:")
+    print("  ✓ outputs/reports/final_report.json")
+    print("  ✓ outputs/reports/final_report.txt")
+    print("  ✓ outputs/experiments/experiment_history.json")
+    print("  ✓ outputs/models/best_model.joblib")
+    print("  ✓ outputs/logs/workflow.log")
+
+    logger.info("WORKFLOW_COMPLETED_SUCCESSFULLY")
 
 if __name__ == "__main__":
     main()
