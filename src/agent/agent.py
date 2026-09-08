@@ -23,10 +23,8 @@ class LLMClient:
     def __init__(self):
         self.gemini_keys = AppConfig.get_gemini_keys()
         self.current_key_idx = 0
-        preferred_model = AppConfig.get_gemini_model()
-        models = [preferred_model, "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash"]
-        # Deduplicate while preserving order
-        self.gemini_models = list(dict.fromkeys(models))
+        preferred_model = AppConfig.get_gemini_model() or "gemini-2.5-flash"
+        self.gemini_models = [preferred_model]
         self.ollama_base_url = AppConfig.get_ollama_base_url()
         self.ollama_models = AppConfig.get_ollama_models()
 
@@ -69,7 +67,7 @@ class LLMClient:
                             }
                         }
                         
-                        response = requests.post(url, headers=headers, json=payload, timeout=15)
+                        response = requests.post(url, headers=headers, json=payload, timeout=30)
                         if response.status_code == 200:
                             data = response.json()
                             text_content = data["candidates"][0]["content"]["parts"][0]["text"]

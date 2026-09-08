@@ -40,30 +40,43 @@ class PreprocessingPipeline:
         if self.numerical_cols:
             num_steps = []
             # Imputation
-            num_steps.append(("imputer", SimpleImputer(strategy=self.num_impute_strat)))
+            num_strat = str(self.num_impute_strat).lower().strip()
+            if num_strat in ["median", "mean", "most_frequent", "constant"]:
+                num_steps.append(("imputer", SimpleImputer(strategy=num_strat)))
+            elif num_strat not in ["none", "skip", "null", "no", "false"]:
+                # Default to median fallback if unknown string
+                num_steps.append(("imputer", SimpleImputer(strategy="median")))
             
             # Scaling
-            if self.scaling_strat == "standard":
+            scale_strat = str(self.scaling_strat).lower().strip()
+            if scale_strat == "standard":
                 num_steps.append(("scaler", StandardScaler()))
-            elif self.scaling_strat == "robust":
+            elif scale_strat == "robust":
                 num_steps.append(("scaler", RobustScaler()))
-            elif self.scaling_strat == "minmax":
+            elif scale_strat == "minmax":
                 num_steps.append(("scaler", MinMaxScaler()))
             # 'none' skips scaler
             
-            transformers.append(("num", Pipeline(num_steps), self.numerical_cols))
+            if num_steps:
+                transformers.append(("num", Pipeline(num_steps), self.numerical_cols))
+            else:
+                transformers.append(("num", "passthrough", self.numerical_cols))
 
         # Categorical branch
         if self.categorical_cols:
             cat_steps = [
                 ("imputer", SimpleImputer(strategy="most_frequent"))
             ]
-            if self.cat_encode_strat == "one_hot":
+            cat_strat = str(self.cat_encode_strat).lower().strip()
+            if cat_strat in ["one_hot", "onehot", "ohe"]:
                 cat_steps.append(("encoder", OneHotEncoder(handle_unknown="ignore", sparse_output=False)))
-            elif self.cat_encode_strat == "ordinal":
+            elif cat_strat in ["ordinal", "label"]:
                 cat_steps.append(("encoder", OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)))
                 
-            transformers.append(("cat", Pipeline(cat_steps), self.categorical_cols))
+            if cat_steps:
+                transformers.append(("cat", Pipeline(cat_steps), self.categorical_cols))
+            else:
+                transformers.append(("cat", "passthrough", self.categorical_cols))
 
         return ColumnTransformer(transformers=transformers, remainder="drop")
 
@@ -95,9 +108,12 @@ class PreprocessingPipeline:
             if name == "num":
                 names.extend(cols)
             elif name == "cat":
-                encoder = trans.named_steps.get("encoder")
-                if isinstance(encoder, OneHotEncoder):
-                    names.extend(list(encoder.get_feature_names_out(cols)))
+                if hasattr(trans, "named_steps") and "encoder" in trans.named_steps:
+                    encoder = trans.named_steps.get("encoder")
+                    if isinstance(encoder, OneHotEncoder):
+                        names.extend(list(encoder.get_feature_names_out(cols)))
+                    else:
+                        names.extend(cols)
                 else:
                     names.extend(cols)
         self.feature_names_ = names
