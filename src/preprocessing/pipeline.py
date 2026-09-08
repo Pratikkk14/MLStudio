@@ -105,3 +105,14 @@ class PreprocessingPipeline:
     def get_feature_names(self) -> List[str]:
         """Returns list of transformed feature names."""
         return self.feature_names_
+
+    def get_feature_summary(self) -> Dict[str, Any]:
+        """Returns summary of feature transformations and dimensionality."""
+        return {
+            "numerical_columns_count": len(self.numerical_cols),
+            "categorical_columns_count": len(self.categorical_cols),
+            "excluded_columns_count": len(self.exclude_columns),
+            "total_engineered_features": len(self.feature_names_),
+            "scaling_applied": self.scaling_strat,
+            "encoding_applied": self.cat_encode_strat
+        }

@@ -45,4 +45,4 @@ class AppConfig:
     @classmethod
     def get_gemini_model(cls) -> str:
         """Default Gemini model identifier."""
-        return os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+        return os.getenv("GEMINI_MODEL") or os.getenv("LLM_MODEL") or "gemini-2.5-flash"
