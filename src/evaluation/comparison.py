@@ -1,32 +1,34 @@
 from typing import Any, Dict, List
 
 class ModelComparator:
-    """Aggregates and compares experimental scores of candidate models."""
+    """Aggregates and compares candidate model experiment results."""
+
     def __init__(self, primary_metric: str):
-        self.primary_metric = primary_metric
+        self.primary_metric = primary_metric.lower()
         self.results: List[Dict[str, Any]] = []
 
-    def add_result(self, model_name: str, metrics: Dict[str, float], runtime: float) -> None:
-        """Records an experiment result."""
-        self.results.append({
-            "model_name": model_name,
-            "metrics": metrics,
-            "runtime_seconds": runtime
-        })
+    def add_result(self, record: Dict[str, Any]) -> None:
+        """Adds a standardized experiment record."""
+        self.results.append(record)
 
-    def get_best_model(self) -> Dict[str, Any]:
-        """Finds best model based on the primary metric."""
+    def get_ranked_models(self) -> List[Dict[str, Any]]:
+        """Ranks all models based on primary metric."""
         if not self.results:
-            raise ValueError("No results available for comparison.")
-        
-        # Determine sorting direction (higher is better for f1/acc, lower is better for rmse/mae)
-        reverse = True
-        if self.primary_metric.lower() in ["mae", "rmse"]:
-            reverse = False
+            return []
 
-        sorted_results = sorted(
+        # Higher is better for accuracy, f1, precision, recall, roc_auc, r2
+        # Lower is better for mae, rmse
+        reverse = self.primary_metric not in ["mae", "rmse"]
+
+        return sorted(
             self.results,
-            key=lambda x: x["metrics"].get(self.primary_metric.lower(), 0.0),
+            key=lambda x: x["metrics"].get(self.primary_metric, 0.0),
             reverse=reverse
         )
-        return sorted_results[0]
+
+    def get_best_model(self) -> Dict[str, Any]:
+        """Returns the top performing model record."""
+        ranked = self.get_ranked_models()
+        if not ranked:
+            raise ValueError("No model results recorded.")
+        return ranked[0]
