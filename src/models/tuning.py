@@ -37,10 +37,22 @@ class HyperparameterTuner:
                 "min_samples_split": [2, 5, 10],
                 "min_samples_leaf": [1, 2, 4]
             }
-        elif "svm" in name or "svc" in name:
+        elif "svm" in name or "svc" in name or "kernel" in name:
             return {
                 "C": [0.1, 1.0, 10.0],
                 "kernel": ["linear", "rbf"]
+            }
+        elif "ridge" in name:
+            return {
+                "alpha": [0.01, 0.1, 1.0, 10.0, 100.0]
+            }
+        elif "voting" in name:
+            return {
+                "weights": [[1, 1, 1], [1, 2, 2], [2, 1, 2], [1, 1, 2], [2, 2, 1]]
+            }
+        elif "stacking" in name:
+            return {
+                "final_estimator__C": [0.01, 0.1, 1.0, 10.0]
             }
         else:
             return {}
