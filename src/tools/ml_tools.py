@@ -69,13 +69,20 @@ class MLTools:
         X_train: Any,
         y_train: Any,
         primary_metric: str,
-        use_class_weights: bool = False
+        use_class_weights: bool = False,
+        selected_candidates: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
-        """Trains and cross-validates candidate baseline models."""
+        """Trains and cross-validates dynamic candidate baseline models and ensembles."""
         if "classification" in task_type.lower():
-            candidates = ClassifierFactory.get_default_candidates(use_class_weights=use_class_weights)
+            if selected_candidates:
+                candidates = ClassifierFactory.create_candidates(selected_candidates, use_class_weights=use_class_weights)
+            else:
+                candidates = ClassifierFactory.get_default_candidates(use_class_weights=use_class_weights)
         else:
-            candidates = RegressorFactory.get_default_candidates()
+            if selected_candidates:
+                candidates = RegressorFactory.create_candidates(selected_candidates)
+            else:
+                candidates = RegressorFactory.get_default_candidates()
 
         validator = ValidationEngine(task_type=task_type, n_splits=5)
         results = []

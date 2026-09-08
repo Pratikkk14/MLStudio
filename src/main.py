@@ -180,13 +180,13 @@ def main():
     state.current_stage = "PROFILED"
 
     # ------------------------------------------------------------
-    # [3/8] AGENT ANALYSIS & DECISION
+    # [3/8] AGENT EDA ANALYSIS & PREPROCESSING DECISION
     # ------------------------------------------------------------
     print("\n------------------------------------------------------------")
-    print("[3/8] AGENT ANALYSIS")
+    print("[3/8] AGENT EDA ANALYSIS & PREPROCESSING DECISION")
     print("------------------------------------------------------------")
     
-    print("Observing dataset state and generating agent decision...")
+    print("Observing dataset distributions, cardinality, and data quality flags...")
     decision_1 = agent.select_analysis_decision(profile, warnings, target_candidates)
     params = decision_1.parameters
 
@@ -211,6 +211,8 @@ def main():
     print(f"Problem: {problem_type.replace('_', ' ').title()}")
     print(f"Optimization metric: {primary_metric.upper()}")
     print(f"Features excluded (Risk/Leakage/Constant): {exclude_cols if exclude_cols else 'None'}")
+    print(f"Scaling strategy: {state.preprocessing['scaling']}")
+    print(f"Encoding strategy: {state.preprocessing['categorical_encoding']}")
     print(f"Observation: {decision_1.observation}")
     print(f"Reason: {decision_1.reason}")
 
@@ -225,10 +227,10 @@ def main():
     state.record_transition("ANALYZED", decision_1.next_action.value, decision_1.to_dict())
 
     # ------------------------------------------------------------
-    # [4/8] PREPROCESSING EXECUTION
+    # [4/8] PREPROCESSING EXECUTION & FEATURE SPACE ANALYSIS
     # ------------------------------------------------------------
     print("\n------------------------------------------------------------")
-    print("[4/8] PREPROCESSING DECISION & EXECUTION")
+    print("[4/8] PREPROCESSING EXECUTION & FEATURE SPACE ANALYSIS")
     print("------------------------------------------------------------")
 
     # Clean target
@@ -252,21 +254,42 @@ def main():
     X_train_proc = preproc_pipeline.fit_transform(X_train_df, y_train)
     X_test_proc = preproc_pipeline.transform(X_test_df)
     feature_names = preproc_pipeline.get_feature_names()
+    feat_summary = preproc_pipeline.get_feature_summary()
 
     print(f"Train split: {X_train_proc.shape[0]} rows | Holdout test split: {X_test_proc.shape[0]} rows")
-    print(f"Processed feature count: {X_train_proc.shape[1]}")
-    print("Numerical: Median imputation + Standard scaling")
-    print("Categorical: Most frequent imputation + One-hot encoding")
+    print(f"Engineered feature dimensionality: {X_train_proc.shape[1]} features")
+    print(f"Scaling applied: {feat_summary['scaling_applied'].title()} | Encoding applied: {feat_summary['encoding_applied'].replace('_', ' ').title()}")
     if use_cw and "classification" in problem_type:
         print("Class imbalance: Balanced class weighting active")
     
     state.current_stage = "PREPROCESSED"
 
     # ------------------------------------------------------------
-    # [5/8] BASELINE EXPERIMENTS
+    # [5/8] AGENT MODEL STRATEGY & CANDIDATE SELECTION
     # ------------------------------------------------------------
     print("\n------------------------------------------------------------")
-    print("[5/8] BASELINE EXPERIMENTS (5-Fold Cross-Validation)")
+    print("[5/8] AGENT MODEL STRATEGY & ENSEMBLE SELECTION")
+    print("------------------------------------------------------------")
+    print("Reasoning on dataset geometry, sample-to-feature ratio, and non-linearity...")
+
+    decision_model_strat = agent.select_model_strategy(
+        profile=profile,
+        feature_summary=feat_summary,
+        problem_type=problem_type,
+        primary_metric=primary_metric,
+        train_shape=X_train_proc.shape
+    )
+    selected_candidates = decision_model_strat.parameters.get("selected_candidates", [])
+    
+    print(f"\nAgent Model Hypothesis: {decision_model_strat.reason}")
+    print(f"Selected Candidate Suite: {', '.join(selected_candidates)}")
+    state.record_transition("MODEL_STRATEGY_SELECTED", decision_model_strat.next_action.value, decision_model_strat.to_dict())
+
+    # ------------------------------------------------------------
+    # [6/8] BASELINE & ENSEMBLE TOURNAMENT (5-Fold Cross-Validation)
+    # ------------------------------------------------------------
+    print("\n------------------------------------------------------------")
+    print("[6/8] BASELINE & ENSEMBLE TOURNAMENT (5-Fold Cross-Validation)")
     print("------------------------------------------------------------")
     
     baseline_results = MLTools.run_baseline_experiments(
@@ -274,7 +297,8 @@ def main():
         X_train=X_train_proc,
         y_train=y_train,
         primary_metric=primary_metric,
-        use_class_weights=use_cw
+        use_class_weights=use_cw,
+        selected_candidates=selected_candidates
     )
 
     comparator = ModelComparator(primary_metric=primary_metric)
@@ -291,20 +315,20 @@ def main():
 
     # Print baseline results table
     header_col = f"{primary_metric.upper():<10}"
-    print(f"\n{'Model':<25} {header_col} {'ROC-AUC':<10} {'Runtime':<10}")
-    print("-" * 60)
+    print(f"\n{'Model / Architecture':<30} {header_col} {'ROC-AUC':<10} {'Runtime':<10}")
+    print("-" * 65)
     for r in comparator.get_ranked_models():
         m_score = r["metrics"].get(primary_metric, 0.0)
         roc_score = r["metrics"].get("roc_auc", 0.0)
-        print(f"{r['model_name']:<25} {m_score:<10.4f} {roc_score:<10.4f} {r['runtime_seconds']:<6.2f}s")
+        print(f"{r['model_name']:<30} {m_score:<10.4f} {roc_score:<10.4f} {r['runtime_seconds']:<6.2f}s")
 
     state.current_stage = "BASELINES_TRAINED"
 
     # ------------------------------------------------------------
-    # [6/8] AGENT DECISION (Select model for hyperparameter tuning)
+    # [7/8] AGENT DECISION & HYPERPARAMETER TUNING
     # ------------------------------------------------------------
     print("\n------------------------------------------------------------")
-    print("[6/8] AGENT DECISION")
+    print("[7/8] AGENT DECISION & HYPERPARAMETER TUNING")
     print("------------------------------------------------------------")
     
     decision_2 = agent.select_tuning_decision(baseline_results, primary_metric)
@@ -317,14 +341,7 @@ def main():
 
     state.record_transition("TUNING_DECISION", decision_2.next_action.value, decision_2.to_dict())
 
-    # ------------------------------------------------------------
-    # [7/8] HYPERPARAMETER TUNING
-    # ------------------------------------------------------------
-    print("\n------------------------------------------------------------")
-    print(f"[7/8] HYPERPARAMETER TUNING: {selected_tune_model}")
-    print("------------------------------------------------------------")
-    print(f"Searching parameter space ({tuning_trials} trials)...")
-
+    print(f"\nSearching parameter space for {selected_tune_model} ({tuning_trials} trials)...")
     tuning_res = MLTools.tune_candidate(
         model_name=selected_tune_model,
         X_train=X_train_proc,
@@ -339,7 +356,7 @@ def main():
     best_cv_score = tuning_res["best_score"]
     best_params = tuning_res["best_params"]
 
-    print(f"\nTrials completed: {tuning_res['trials_run']}")
+    print(f"Trials completed: {tuning_res['trials_run']}")
     print(f"Best configuration: {best_params if best_params else 'Default configuration'}")
     print(f"Best CV {primary_metric.upper()}: {best_cv_score:.4f}")
     print(f"Tuning time: {tuning_res['tuning_time_seconds']:.2f}s")
