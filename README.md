@@ -64,4 +64,16 @@ ml-studio/
 To check if the CLI helper is set up correctly:
 ```bash
 python -m src.main --help
+
+# Run complete AutoML workflow on any CSV/Excel dataset
+python -m src.main --dataset datasets/synthetic_dataset.xlsx
+
+# Optional: Run with explicit target and metric
+python -m src.main --dataset datasets/synthetic_dataset.xlsx --target churn --metric f1
+
+# Optional: Run in interactive mode with human-in-the-loop checkpoints
+python -m src.main --dataset "E:\Downloads\Dry_Bean_Dataset.xlsx" --interactive
+
+# Run automated unit tests
+pytest
 ```
