@@ -18,6 +18,13 @@ def test_mock_agent_decisions():
     assert dec_1.parameters["target"] == "churn"
     assert "customer_id" in dec_1.parameters["exclude_columns"]
 
+    # 1.5 Model strategy decision
+    feat_summary = {"total_engineered_features": 8, "scaling_applied": "standard", "encoding_applied": "one_hot"}
+    dec_strat = agent.select_model_strategy(profile, feat_summary, "binary_classification", "f1", (80, 8))
+    assert dec_strat.next_action == AgentAction.RUN_BASELINES
+    assert "random_forest" in dec_strat.parameters["selected_candidates"]
+    assert "voting_ensemble" in dec_strat.parameters["selected_candidates"]
+
     # 2. Tuning decision
     baselines = [
         {"model_name": "Logistic Regression", "metrics": {"f1": 0.75}},

@@ -9,6 +9,18 @@ from src.models.tuning import HyperparameterTuner
 def test_classifier_factory():
     model = ClassifierFactory.get_model("logistic_regression")
     assert isinstance(model, LogisticRegression)
+    
+    voting = ClassifierFactory.get_model("voting_ensemble")
+    assert voting is not None
+    
+    stacking = ClassifierFactory.get_model("stacking_ensemble")
+    assert stacking is not None
+
+def test_classifier_factory_create_candidates():
+    candidates = ClassifierFactory.create_candidates(["random_forest", "gradient_boosting", "voting_ensemble"])
+    assert len(candidates) == 3
+    assert "Random Forest (Bagging)" in candidates
+    assert "Voting Ensemble (Soft)" in candidates
 
 def test_classifier_factory_invalid():
     with pytest.raises(ValueError):
@@ -17,6 +29,18 @@ def test_classifier_factory_invalid():
 def test_regressor_factory():
     model = RegressorFactory.get_model("linear_regression")
     assert isinstance(model, LinearRegression)
+    
+    voting = RegressorFactory.get_model("voting_ensemble")
+    assert voting is not None
+    
+    stacking = RegressorFactory.get_model("stacking_ensemble")
+    assert stacking is not None
+
+def test_regressor_factory_create_candidates():
+    candidates = RegressorFactory.create_candidates(["decision_tree", "ridge", "stacking_ensemble"])
+    assert len(candidates) == 3
+    assert "Decision Tree" in candidates
+    assert "Stacking Ensemble" in candidates
 
 def test_hyperparameter_tuning():
     X = np.random.randn(30, 4)
