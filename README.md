@@ -5,7 +5,7 @@
 [![Scikit-Learn](https://img.shields.io/badge/Scikit--Learn-1.2%2B-F7931E?style=for-the-badge&logo=scikit-learn&logoColor=white)](https://scikit-learn.org/)
 [![Google Gemini API](https://img.shields.io/badge/Google%20Gemini-Multi--Key%20Rotation-8E75C2?style=for-the-badge&logo=google&logoColor=white)](https://ai.google.dev/)
 [![Ollama](https://img.shields.io/badge/Ollama-Offline%20Failover-black?style=for-the-badge&logo=ollama&logoColor=white)](https://ollama.ai/)
-[![Pytest](https://img.shields.io/badge/Tests-24%2F24%20Passing-brightgreen?style=for-the-badge&logo=pytest&logoColor=white)](https://pytest.org/)
+[![Pytest](https://img.shields.io/badge/Tests-26%2F26%20Passing-brightgreen?style=for-the-badge&logo=pytest&logoColor=white)](https://pytest.org/)
 
 ---
 
@@ -45,6 +45,15 @@ Unlike legacy AutoML tools that rely on brute-force grid searches or rigid seque
 ### 5. 🔍 Auditable Artifact Generation
 * Exports complete experiment histories (`experiment_history.json`), executive text reports (`final_report.txt`), JSON deliverables (`final_report.json`), serialized models (`best_model.joblib`), and execution traces (`workflow.log`).
 
+### 6. 📂 Directory Ingestion & Automated Split Detection
+* **Dual Ingestion**: Accepts either individual tabular files (`.csv`, `.xlsx`, `.xls`) or entire folder packages (`datasets/my_folder/`).
+* **Pre-Split Detection**: Automatically scans folder contents for `*train*` and `*test*`/`*val*` files. When identified, dedicated partitions are used directly to guarantee zero holdout contamination.
+* **Stratified 80/20 Auto-Split**: When a single dataset is provided or detected in a directory, the system applies an automated stratified holdout split.
+
+### 7. 🧠 Stateful Deliberative Cognitive Architecture (Non-Reactive)
+* The agent is **not a simple reactive reflex agent**; it operates as an **Autonomous Stateful Deliberative Cognitive Agent** running an Observe-Reason-Decide-Act (ORDA) loop.
+* Conditioned on a persisted `WorkflowState`, the agent evaluates sample-to-feature geometry, formulates theoretical bias-variance hypotheses, balances CV score against standard deviation ($\sigma_{\text{CV}}$), and justifies production deployment decisions. See [`docs/AGENT_ARCHITECTURE.md`](docs/AGENT_ARCHITECTURE.md) for complete details.
+
 ---
 
 ## 🔄 The 8-Stage Agentic Workflow
@@ -54,7 +63,7 @@ Unlike legacy AutoML tools that rely on brute-force grid searches or rigid seque
 │                        ML STUDIO WORKFLOW ENGINE                       │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │
-    [1/8] DATASET VALIDATION        ▼  Load file, check duplicates & validate schema
+    [1/8] DATASET VALIDATION        ▼  Load file/directory, check duplicates & validate schema
     [2/8] STATISTICAL EDA           ▼  Compute nulls, IQR outliers, types & cardinality
     [3/8] AGENT PREPROCESSING       ▼  LLM selects imputation, scaling, encoding & drop cols
     [4/8] FEATURE TRANSFORMATION    ▼  Execute ColumnTransformer & inspect feature space
@@ -72,6 +81,8 @@ Unlike legacy AutoML tools that rely on brute-force grid searches or rigid seque
 MLStudio/
 ├── README.md                          # Project documentation and guide
 ├── ML_STUDIO_SPEC.md                  # Comprehensive architectural specification
+├── docs/
+│   └── AGENT_ARCHITECTURE.md          # Stateful Deliberative Cognitive Agent specification
 ├── requirements.txt                   # Production dependencies
 ├── .env.example                       # Multi-key environment template
 ├── .gitignore                         # Git exclusion rules
@@ -86,7 +97,7 @@ MLStudio/
 │   │   ├── decisions.py               # Enums & AgentDecision data classes
 │   │   └── memory.py                  # Trajectory tracker
 │   ├── data/                          # Dataset loading & statistical profiling
-│   │   ├── loader.py                  # CSV / Excel loader with type detection
+│   │   ├── loader.py                  # Single file & directory package loader (train/test detection)
 │   │   ├── validator.py               # Quality checks, leakage warnings, identifiers
 │   │   └── profiler.py                # Statistical EDA & IQR outlier calculations
 │   ├── preprocessing/                 # Feature pipeline engine
@@ -102,13 +113,19 @@ MLStudio/
 │   │   └── comparison.py              # ModelComparator tournament ranker
 │   ├── tools/                         # Unified MLTools execution layer
 │   │   └── ml_tools.py                # Consolidated tool interfaces & artifact exporter
-│   └── utils/                         # Config & logging
-│       ├── config.py                  # AppConfig (multi-key discovery & Ollama URLs)
-│       └── logging.py                 # Timestamped file & console logger
-├── tests/                             # Automated test suite (24 tests)
+│   ├── utils/                         # Config & logging
+│   │   ├── config.py                  # AppConfig (multi-key discovery & Ollama URLs)
+│   │   └── logging.py                 # Timestamped file & console logger
+│   └── web/                           # Native Python zero-dependency web dashboard
+│       ├── server.py                  # Multi-threaded HTTP API & static asset server
+│       └── static/                    # Dark minimalist frontend (no AI slop)
+│           ├── index.html             # High-density dashboard markup
+│           ├── style.css              # Obsidian dark palette & 1px crisp borders
+│           └── app.js                 # Polling, live logs & interactive sandbox controller
+├── tests/                             # Automated test suite (26 tests)
 │   ├── test_agent.py                  # Agent reasoning & JSON parsing tests
 │   ├── test_evaluation.py             # Validation & metric calculation tests
-│   ├── test_loader.py                 # File loader tests
+│   ├── test_loader.py                 # File & directory pre-split loader tests
 │   ├── test_models.py                 # Factory, ensemble & tuning tests
 │   ├── test_preprocessing.py          # Preprocessing pipeline tests
 │   ├── test_profiler.py               # Profiler & outlier tests
@@ -162,34 +179,58 @@ GEMINI_API_KEY3 = AIzaSy...
 
 ---
 
-## 💻 CLI Usage & Commands
+## 💻 Web UI & CLI Usage
 
-### 1. Run Complete Autonomous AutoML Workflow
+### 🚀 1. Launch Interactive Dark-Themed Web UI
+ML Studio includes an engineering-grade, minimalist dark-themed web dashboard (with 0 external web dependencies — runs natively using standard library HTTP):
 ```powershell
-# Run with AI Agent (Automatic Target, Preprocessing, Model Strategy & Tuning)
+# Activate virtual environment
+.\myvenv\Scripts\activate
+
+# Launch the ML Studio Web UI (defaults to http://127.0.0.1:8501)
+python src/web/server.py 8501
+```
+Open **[http://127.0.0.1:8501](http://127.0.0.1:8501)** to access:
+- **Executive KPI Strip**: Real-time champion model, F1-scores, accuracy, feature dimensionality, and dataset shape.
+- **📁 Upload Folder Integration**: Directly upload dataset directories; automatically detects pre-split `train`/`test` files versus single datasets without disrupting the clean UI.
+- **Overview & Champion**: Hyperparameters table, holdout metrics, confusion matrix, feature importances, and LLM reasoning.
+- **Model Tournament Leaderboard**: 5-Fold Stratified Cross-Validation table with ranks, ± std deviations, and runtimes.
+- **Agent Cognitive Trace**: 4-step Observe-Reason-Decide-Act decision log with confidence scores and action parameters.
+- **Dataset & Quality Audit**: Data quality flags (leakage, high cardinality, constant columns), detected partition strategy, and raw dataset preview.
+- **Live Pipeline Runner & Console**: Real-time 8-stage tracker and streaming terminal stdout.
+- **Interactive Inference Sandbox**: Live predictions against `best_model.joblib` with class probability distributions and sub-150ms latency.
+
+---
+
+### 2. Run Autonomous AutoML Workflow via CLI
+```powershell
+# Run with single dataset file
 python -m src.main --dataset datasets/synthetic_dataset.xlsx
+
+# Run with a directory package (auto-detects pre-split train/test files or auto-splits)
+python -m src.main --dataset "path/to/dataset_folder"
 
 # Run with an external dataset (e.g. Dry Bean Dataset)
 python -m src.main --dataset "path/to/your/dataset.xlsx"
 ```
 
-### 2. Interactive Human-in-the-Loop Mode
+### 3. Interactive Human-in-the-Loop Mode
 Enables human approval checkpoints before executing preprocessing and model training:
 ```powershell
 python -m src.main --dataset datasets/synthetic_dataset.xlsx --interactive
 ```
 
-### 3. Explicit Target & Metric Overrides
+### 4. Explicit Target & Metric Overrides
 ```powershell
 python -m src.main --dataset datasets/synthetic_dataset.xlsx --target churn --metric f1
 ```
 
-### 4. Deterministic Mock Mode (Offline Testing)
+### 5. Deterministic Mock Mode (Offline Testing)
 ```powershell
 python -m src.main --dataset datasets/synthetic_dataset.xlsx --agent-mode mock
 ```
 
-### 5. Run Automated Test Suite
+### 6. Run Automated Test Suite (26 Tests)
 ```powershell
 pytest -v
 ```
