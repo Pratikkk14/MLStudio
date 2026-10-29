@@ -24,6 +24,14 @@ class MLTools:
         return DatasetLoader(file_path).load()
 
     @staticmethod
+    def inspect_dataset_path(path_str: str) -> Dict[str, Any]:
+        return DatasetLoader(path_str).get_info()
+
+    @staticmethod
+    def load_dataset_splits(path_str: str) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
+        return DatasetLoader(path_str).load_splits()
+
+    @staticmethod
     def validate_dataset(df: pd.DataFrame, target: Optional[str] = None) -> Tuple[List[str], List[str]]:
         return DatasetValidator(df, target).validate()
 

@@ -110,9 +110,21 @@ def main():
     print("\n------------------------------------------------------------")
     print("[1/8] DATASET VALIDATION")
     print("------------------------------------------------------------")
+    ds_info = MLTools.inspect_dataset_path(str(dataset_path))
+    if ds_info.get("is_directory"):
+        print(f"✓ Dataset Directory: {dataset_path.name}")
+        if ds_info.get("is_presplit"):
+            train_fname = Path(ds_info['train_file']).name
+            test_fname = Path(ds_info['test_file']).name
+            print(f"✓ Pre-split Dataset Identified: Train ({train_fname}) + Test ({test_fname})")
+        else:
+            primary_fname = Path(ds_info['primary_file']).name if ds_info.get('primary_file') else 'Unknown'
+            print(f"✓ Single Dataset Identified in Folder: {primary_fname}")
+
     try:
-        df = MLTools.load_dataset(str(dataset_path))
-        logger.info(f"DATASET_LOADED | Shape: {df.shape}")
+        train_df_raw, test_df_raw = MLTools.load_dataset_splits(str(dataset_path))
+        df = pd.concat([train_df_raw, test_df_raw], ignore_index=True) if test_df_raw is not None else train_df_raw
+        logger.info(f"DATASET_LOADED | Shape: {df.shape} | Presplit: {test_df_raw is not None}")
     except Exception as e:
         print(f"[!] Error loading dataset: {e}")
         logger.error(f"LOAD_ERROR | {e}")
@@ -120,7 +132,7 @@ def main():
 
     errors, warnings = MLTools.validate_dataset(df, args.target)
 
-    print("✓ File loaded")
+    print("✓ Data loaded successfully")
     print(f"✓ {df.shape[0]:,} rows")
     print(f"✓ {df.shape[1]:,} columns")
 
@@ -233,21 +245,41 @@ def main():
     print("[4/8] PREPROCESSING EXECUTION & FEATURE SPACE ANALYSIS")
     print("------------------------------------------------------------")
 
-    # Clean target
-    df_clean = df.dropna(subset=[target]).copy()
-    y_raw = df_clean[target]
-    X_raw = df_clean.drop(columns=[target])
+    # Handle Train/Test Partitioning
+    if test_df_raw is not None and target in test_df_raw.columns:
+        print("Partition Strategy: Pre-split Train/Test directory utilized (zero data leakage)")
+        train_clean = train_df_raw.dropna(subset=[target]).copy()
+        test_clean = test_df_raw.dropna(subset=[target]).copy()
 
-    # Convert y to numerical if classification strings
-    if "classification" in problem_type:
-        classes, y_encoded = np.unique(y_raw.astype(str), return_inverse=True)
+        y_train_raw = train_clean[target]
+        X_train_df = train_clean.drop(columns=[target])
+
+        y_test_raw = test_clean[target]
+        X_test_df = test_clean.drop(columns=[target])
+
+        if "classification" in problem_type:
+            classes, y_train = np.unique(y_train_raw.astype(str), return_inverse=True)
+            class_map = {cls_name: i for i, cls_name in enumerate(classes)}
+            y_test = y_test_raw.astype(str).map(class_map).fillna(0).values.astype(int)
+        else:
+            classes = None
+            y_train = y_train_raw.values.astype(float)
+            y_test = y_test_raw.values.astype(float)
     else:
-        classes = None
-        y_encoded = y_raw.values.astype(float)
+        # Single dataset: Stratified 80% Train, 20% Untouched Final Test
+        print("Partition Strategy: Single dataset identified -> Applying Stratified 80/20 train/test split")
+        df_clean = df.dropna(subset=[target]).copy()
+        y_raw = df_clean[target]
+        X_raw = df_clean.drop(columns=[target])
 
-    # Holdout Train/Test Split (80% Train, 20% Untouched Final Test)
-    validator_engine = ValidationEngine(task_type=problem_type, test_size=0.2, random_seed=42)
-    X_train_df, X_test_df, y_train, y_test = validator_engine.split(X_raw, y_encoded)
+        if "classification" in problem_type:
+            classes, y_encoded = np.unique(y_raw.astype(str), return_inverse=True)
+        else:
+            classes = None
+            y_encoded = y_raw.values.astype(float)
+
+        validator_engine = ValidationEngine(task_type=problem_type, test_size=0.2, random_seed=42)
+        X_train_df, X_test_df, y_train, y_test = validator_engine.split(X_raw, y_encoded)
 
     # Build and fit preprocessing pipeline on Train
     preproc_pipeline = MLTools.build_preprocessing_pipeline(state.preprocessing)
