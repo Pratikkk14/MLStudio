@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ML Studio — Stateful Agentic AutoML</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="dark-theme">
+  <!-- Top Navigation Bar -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="brand">
+        <span class="brand-title">ML STUDIO</span>
+        <span class="brand-badge">AutoML</span>
+      </div>
+      <div class="pipeline-status-badge" id="globalStatusBadge">
+        <span class="status-indicator-dot idle"></span>
+        <span class="status-indicator-text" id="globalStatusText">Checking Status...</span>
+      </div>
+    </div>
+
+    <div class="header-right">
+      <div class="header-control-group">
+        <label for="datasetSelect" class="control-label">Dataset:</label>
+        <select id="datasetSelect" class="form-select">
+          <option value="datasets/synthetic_dataset.xlsx">synthetic_dataset.xlsx</option>
+        </select>
+        <button id="uploadFolderBtn" class="btn btn-subtle btn-sm" title="Upload folder containing dataset or pre-split train/test data">
+          📁 Upload Folder
+        </button>
+        <input type="file" id="folderInput" webkitdirectory directory multiple style="display: none;">
+      </div>
+
+      <div class="header-control-group">
+        <label for="modeSelect" class="control-label">Agent:</label>
+        <select id="modeSelect" class="form-select">
+          <option value="real">Gemini Rotation</option>
+          <option value="mock">Deterministic Mock</option>
+        </select>
+      </div>
+
+      <button id="runAutoMLBtn" class="btn btn-primary">
+        <span class="btn-spinner" id="btnSpinner"></span>
+        <span class="btn-label" id="btnLabel">Run Pipeline</span>
+      </button>
+
+      <button id="stopAutoMLBtn" class="btn btn-danger" style="display: none;">
+        Cancel Run
+      </button>
+    </div>
+  </header>
+
+  <!-- Executive Summary KPI Strip -->
+  <section class="kpi-strip" id="kpiStrip">
+    <div class="kpi-cell">
+      <span class="kpi-label">Champion Architecture</span>
+      <span class="kpi-value highlight-green" id="kpiChampion">—</span>
+      <span class="kpi-sub" id="kpiProblemType">Problem: —</span>
+    </div>
+    <div class="kpi-cell">
+      <span class="kpi-label">Holdout F1-Score</span>
+      <span class="kpi-value mono" id="kpiF1">—</span>
+      <span class="kpi-sub" id="kpiCvF1">5-Fold CV: —</span>
+    </div>
+    <div class="kpi-cell">
+      <span class="kpi-label">Holdout Accuracy</span>
+      <span class="kpi-value mono" id="kpiAccuracy">—</span>
+      <span class="kpi-sub" id="kpiRocAuc">ROC-AUC: —</span>
+    </div>
+    <div class="kpi-cell">
+      <span class="kpi-label">Feature Space</span>
+      <span class="kpi-value mono" id="kpiFeatures">—</span>
+      <span class="kpi-sub" id="kpiExcluded">Excluded: —</span>
+    </div>
+    <div class="kpi-cell">
+      <span class="kpi-label">Dataset Profiling</span>
+      <span class="kpi-value mono" id="kpiRows">—</span>
+      <span class="kpi-sub" id="kpiMissing">Missing: —</span>
+    </div>
+  </section>
+
+  <!-- Main Navigation Tabs -->
+  <nav class="tabs-nav" id="tabsNav">
+    <button class="tab-btn active" id="tabBtnOverview" data-tab="tab-overview">Overview & Champion</button>
+    <button class="tab-btn" id="tabBtnTournament" data-tab="tab-tournament">Model Tournament</button>
+    <button class="tab-btn" id="tabBtnCognition" data-tab="tab-cognition">Agent Cognitive Trace</button>
+    <button class="tab-btn" id="tabBtnDataset" data-tab="tab-dataset">Dataset & Quality Audit</button>
+    <button class="tab-btn" id="tabBtnRunner" data-tab="tab-runner">Console & Pipeline</button>
+    <button class="tab-btn" id="tabBtnInference" data-tab="tab-inference">Inference Sandbox</button>
+  </nav>
+
+  <!-- Main Content Body -->
+  <main class="app-main">
+
+    <!-- TAB 1: OVERVIEW & CHAMPION -->
+    <div class="tab-pane active" id="tab-overview">
+      <div class="grid-2col">
+        <!-- Champion Model Card -->
+        <div class="panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Champion Model Specifications</h2>
+            <span class="badge badge-success" id="championBadge">Selected for Production</span>
+          </div>
+          <div class="panel-body">
+            <div class="specs-grid">
+              <div class="spec-row">
+                <span class="spec-key">Model Family:</span>
+                <span class="spec-val" id="specModelName">—</span>
+              </div>
+              <div class="spec-row">
+                <span class="spec-key">Target Column:</span>
+                <span class="spec-val mono" id="specTarget">—</span>
+              </div>
+              <div class="spec-row">
+                <span class="spec-key">Primary Metric:</span>
+                <span class="spec-val mono" id="specMetric">—</span>
+              </div>
+              <div class="spec-row">
+                <span class="spec-key">Scaling Applied:</span>
+                <span class="spec-val" id="specScaling">—</span>
+              </div>
+              <div class="spec-row">
+                <span class="spec-key">Categorical Encoding:</span>
+                <span class="spec-val" id="specEncoding">—</span>
+              </div>
+              <div class="spec-row">
+                <span class="spec-key">Class Weighting:</span>
+                <span class="spec-val" id="specClassWeights">—</span>
+              </div>
+            </div>
+
+            <div class="section-divider"></div>
+            <h3 class="sub-heading">Optimal Hyperparameters</h3>
+            <div class="params-table-wrapper" id="hyperparamsWrapper">
+              <table class="data-table params-table">
+                <thead>
+                  <tr>
+                    <th>Parameter</th>
+                    <th>Optimized Value</th>
+                  </tr>
+                </thead>
+                <tbody id="hyperparamsTbody">
+                  <tr><td colspan="2" class="text-muted">No hyperparameters available</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Evaluation Metrics & Confusion Matrix -->
+        <div class="panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Holdout Test Evaluation (Untouched 20% Split)</h2>
+          </div>
+          <div class="panel-body">
+            <div class="metrics-row" id="holdoutMetricsRow">
+              <div class="metric-box">
+                <span class="metric-box-label">Accuracy</span>
+                <span class="metric-box-val" id="valAccuracy">—</span>
+              </div>
+              <div class="metric-box">
+                <span class="metric-box-label">F1-Score</span>
+                <span class="metric-box-val highlight-green" id="valF1">—</span>
+              </div>
+              <div class="metric-box">
+                <span class="metric-box-label">Precision</span>
+                <span class="metric-box-val" id="valPrecision">—</span>
+              </div>
+              <div class="metric-box">
+                <span class="metric-box-label">Recall</span>
+                <span class="metric-box-val" id="valRecall">—</span>
+              </div>
+              <div class="metric-box">
+                <span class="metric-box-label">ROC-AUC</span>
+                <span class="metric-box-val" id="valRocAuc">—</span>
+              </div>
+            </div>
+
+            <div class="section-divider"></div>
+            <h3 class="sub-heading">Confusion Matrix</h3>
+            <div class="cm-container" id="cmContainer">
+              <div class="cm-grid">
+                <div class="cm-cell cm-header"></div>
+                <div class="cm-cell cm-header">Predicted Negative (0)</div>
+                <div class="cm-cell cm-header">Predicted Positive (1)</div>
+
+                <div class="cm-cell cm-header">Actual Negative (0)</div>
+                <div class="cm-cell cm-data cm-tn" id="cmTN">
+                  <span class="cm-number">—</span>
+                  <span class="cm-label">True Negative</span>
+                </div>
+                <div class="cm-cell cm-data cm-fp" id="cmFP">
+                  <span class="cm-number">—</span>
+                  <span class="cm-label">False Positive</span>
+                </div>
+
+                <div class="cm-cell cm-header">Actual Positive (1)</div>
+                <div class="cm-cell cm-data cm-fn" id="cmFN">
+                  <span class="cm-number">—</span>
+                  <span class="cm-label">False Negative</span>
+                </div>
+                <div class="cm-cell cm-data cm-tp" id="cmTP">
+                  <span class="cm-number">—</span>
+                  <span class="cm-label">True Positive</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Feature Importances & LLM Rationale -->
+      <div class="grid-2col mt-16">
+        <!-- Feature Importances -->
+        <div class="panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Feature Importance Distribution</h2>
+            <span class="text-muted text-sm">Gini impurity gain / tree splitting</span>
+          </div>
+          <div class="panel-body">
+            <div class="fi-list" id="featureImportanceList">
+              <div class="text-muted">Loading feature importances...</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- LLM Agent Deployment Recommendation -->
+        <div class="panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Agent Deployment Recommendation</h2>
+            <span class="badge badge-info">Gemini 2.5 Flash</span>
+          </div>
+          <div class="panel-body">
+            <div class="agent-rationale-box" id="finalRecommendationReason">
+              Loading deployment rationale...
+            </div>
+            <div class="artifact-links mt-16">
+              <span class="spec-key">Auditable Artifacts:</span>
+              <div class="artifact-tags">
+                <span class="tag">outputs/reports/final_report.json</span>
+                <span class="tag">outputs/experiments/experiment_history.json</span>
+                <span class="tag">outputs/models/best_model.joblib</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 2: MODEL TOURNAMENT LEADERBOARD -->
+    <div class="tab-pane" id="tab-tournament">
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">5-Fold Stratified Cross-Validation Tournament</h2>
+            <p class="panel-desc">All candidate algorithms evaluated across heterogeneous folds under identical preprocessing conditions.</p>
+          </div>
+          <div class="tournament-summary-badges">
+            <span class="badge badge-subtle" id="tournamentTotalModels">5 Models Evaluated</span>
+            <span class="badge badge-subtle">Folds: 5 (Stratified)</span>
+          </div>
+        </div>
+        <div class="panel-body no-padding">
+          <div class="table-responsive">
+            <table class="data-table leaderboard-table" id="tournamentTable">
+              <thead>
+                <tr>
+                  <th style="width: 50px;">Rank</th>
+                  <th>Model / Architecture</th>
+                  <th>Family</th>
+                  <th>CV Score (Mean ± Std)</th>
+                  <th>Accuracy</th>
+                  <th>Precision</th>
+                  <th>Recall</th>
+                  <th>ROC-AUC</th>
+                  <th>Runtime (s)</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="tournamentTbody">
+                <tr><td colspan="10" class="text-muted text-center py-20">Loading tournament results...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: AGENT COGNITIVE TRACE -->
+    <div class="tab-pane" id="tab-cognition">
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">Agentic Cognitive Decision Log</h2>
+            <p class="panel-desc">Step-by-step Observe-Reason-Decide-Act trajectory executed by the LLM reasoning engine.</p>
+          </div>
+        </div>
+        <div class="panel-body">
+          <div class="timeline" id="cognitiveTimeline">
+            <div class="text-muted">Loading agent decisions...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 4: DATASET & QUALITY AUDIT -->
+    <div class="tab-pane" id="tab-dataset">
+      <div class="grid-2col">
+        <!-- Dataset Overview Stats -->
+        <div class="panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Dataset Characteristics</h2>
+          </div>
+          <div class="panel-body">
+            <div class="specs-grid" id="datasetStatsGrid">
+              <div class="spec-row">
+                <span class="spec-key">File Name:</span>
+                <span class="spec-val mono" id="dsFileName">—</span>
+              </div>
+              <div class="spec-row">
+                <span class="spec-key">Shape:</span>
+                <span class="spec-val mono" id="dsShape">—</span>
+              </div>
+              <div class="spec-row">
+                <span class="spec-key">Numerical Columns:</span>
+                <span class="spec-val mono" id="dsNumCount">—</span>
+              </div>
+              <div class="spec-row">
+                <span class="spec-key">Categorical Columns:</span>
+                <span class="spec-val mono" id="dsCatCount">—</span>
+              </div>
+              <div class="spec-row">
+                <span class="spec-key">Duplicate Rows:</span>
+                <span class="spec-val mono" id="dsDuplicates">—</span>
+              </div>
+              <div class="spec-row">
+                <span class="spec-key">Total Missing Pct:</span>
+                <span class="spec-val mono" id="dsMissingPct">—</span>
+              </div>
+              <div class="spec-row">
+                <span class="spec-key">Partition Strategy:</span>
+                <span class="spec-val highlight-blue mono" id="dsSplitStrategy">Single Dataset (Stratified 80/20 Auto-Split)</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Data Quality Warnings -->
+        <div class="panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Automated Data Quality Audit</h2>
+            <span class="badge badge-warning" id="qualityFlagsCount">0 Flags</span>
+          </div>
+          <div class="panel-body">
+            <div class="quality-flags-list" id="qualityFlagsList">
+              <div class="text-muted">No data quality flags reported.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Column Dictionary & Schema -->
+      <div class="panel mt-16">
+        <div class="panel-header">
+          <h2 class="panel-title">Column Dictionary & Profiling</h2>
+          <span class="text-muted text-sm">Inspected types, null counts, and cardinality</span>
+        </div>
+        <div class="panel-body no-padding">
+          <div class="table-responsive">
+            <table class="data-table" id="columnsTable">
+              <thead>
+                <tr>
+                  <th>Column Name</th>
+                  <th>Detected Type</th>
+                  <th>Null Count</th>
+                  <th>Unique Values</th>
+                  <th>AutoML Action</th>
+                </tr>
+              </thead>
+              <tbody id="columnsTbody">
+                <tr><td colspan="5" class="text-muted text-center">Loading column dictionary...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Data Preview Table -->
+      <div class="panel mt-16">
+        <div class="panel-header">
+          <h2 class="panel-title">Dataset Sample Preview (First 15 Rows)</h2>
+        </div>
+        <div class="panel-body no-padding">
+          <div class="table-responsive preview-table-wrapper" id="previewTableWrapper">
+            <table class="data-table preview-table" id="previewTable">
+              <thead id="previewThead"></thead>
+              <tbody id="previewTbody">
+                <tr><td class="text-muted text-center py-20">Loading dataset preview...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 5: PIPELINE RUNNER & CONSOLE -->
+    <div class="tab-pane" id="tab-runner">
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">AutoML Pipeline Execution Stage Tracker</h2>
+            <p class="panel-desc">Real-time status of the 8-stage stateful agentic workflow.</p>
+          </div>
+          <div id="runnerTimer" class="mono text-muted text-sm">Elapsed: 0.0s</div>
+        </div>
+        <div class="panel-body">
+          <div class="stages-tracker" id="stagesTracker">
+            <div class="stage-step" data-step="1">
+              <div class="step-num">1</div>
+              <div class="step-info">
+                <span class="step-title">Dataset Validation</span>
+                <span class="step-desc">Schema, nulls, duplicates</span>
+              </div>
+            </div>
+            <div class="stage-step" data-step="2">
+              <div class="step-num">2</div>
+              <div class="step-info">
+                <span class="step-title">Statistical EDA</span>
+                <span class="step-desc">IQR outliers, cardinality</span>
+              </div>
+            </div>
+            <div class="stage-step" data-step="3">
+              <div class="step-num">3</div>
+              <div class="step-info">
+                <span class="step-title">Agent Preprocessing</span>
+                <span class="step-desc">Target & metric reasoning</span>
+              </div>
+            </div>
+            <div class="stage-step" data-step="4">
+              <div class="step-num">4</div>
+              <div class="step-info">
+                <span class="step-title">Feature Transform</span>
+                <span class="step-desc">ColumnTransformer fit</span>
+              </div>
+            </div>
+            <div class="stage-step" data-step="5">
+              <div class="step-num">5</div>
+              <div class="step-info">
+                <span class="step-title">Model Strategy</span>
+                <span class="step-desc">Candidate suite selection</span>
+              </div>
+            </div>
+            <div class="stage-step" data-step="6">
+              <div class="step-num">6</div>
+              <div class="step-info">
+                <span class="step-title">CV Tournament</span>
+                <span class="step-desc">5-Fold Stratified validation</span>
+              </div>
+            </div>
+            <div class="stage-step" data-step="7">
+              <div class="step-num">7</div>
+              <div class="step-info">
+                <span class="step-title">Hyperparameter Tuning</span>
+                <span class="step-desc">Randomized search (20 trials)</span>
+              </div>
+            </div>
+            <div class="stage-step" data-step="8">
+              <div class="step-num">8</div>
+              <div class="step-info">
+                <span class="step-title">Holdout & Export</span>
+                <span class="step-desc">Holdout test & deliverables</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Terminal Output -->
+      <div class="panel mt-16">
+        <div class="panel-header terminal-header">
+          <div class="terminal-title-group">
+            <span class="terminal-dot red"></span>
+            <span class="terminal-dot yellow"></span>
+            <span class="terminal-dot green"></span>
+            <span class="terminal-title">Workflow Execution Log (stdout)</span>
+          </div>
+          <div class="terminal-actions">
+            <label class="autoscroll-label">
+              <input type="checkbox" id="autoScrollCheckbox" checked>
+              <span>Auto-scroll</span>
+            </label>
+            <button id="clearLogsBtn" class="btn btn-subtle btn-sm">Clear</button>
+          </div>
+        </div>
+        <div class="terminal-container" id="terminalOutput">
+          <pre class="terminal-body" id="terminalBody"></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 6: INFERENCE SANDBOX -->
+    <div class="tab-pane" id="tab-inference">
+      <div class="grid-2col">
+        <!-- Input Form -->
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <h2 class="panel-title">Interactive Model Inference Sandbox</h2>
+              <p class="panel-desc">Test real-time predictions against the fitted <code id="infModelTag">best_model.joblib</code>.</p>
+            </div>
+            <button id="loadSampleInputsBtn" class="btn btn-subtle btn-sm">Load Preset</button>
+          </div>
+          <div class="panel-body">
+            <form id="predictionForm" class="prediction-form">
+              <div class="form-group">
+                <label for="inputAge" class="form-label">Age (years):</label>
+                <input type="number" id="inputAge" class="form-input" value="38" step="1" required>
+              </div>
+
+              <div class="form-group">
+                <label for="inputTenure" class="form-label">Tenure (months):</label>
+                <input type="number" id="inputTenure" class="form-input" value="12" step="1" required>
+              </div>
+
+              <div class="form-group">
+                <label for="inputMonthlyCharges" class="form-label">Monthly Charges ($):</label>
+                <input type="number" id="inputMonthlyCharges" class="form-input" value="85.50" step="0.01" required>
+              </div>
+
+              <div class="form-group">
+                <label for="inputGender" class="form-label">Gender:</label>
+                <select id="inputGender" class="form-select">
+                  <option value="Female">Female</option>
+                  <option value="Male">Male</option>
+                </select>
+              </div>
+
+              <button type="submit" id="predictBtn" class="btn btn-primary w-full mt-16">
+                Compute Prediction
+              </button>
+            </form>
+          </div>
+        </div>
+
+        <!-- Prediction Result Output -->
+        <div class="panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Prediction Output</h2>
+            <span class="mono text-muted text-sm" id="infLatency">—</span>
+          </div>
+          <div class="panel-body">
+            <div class="prediction-result-card" id="predictionResultCard">
+              <div class="text-muted text-center py-20" id="predictionPlaceholder">
+                Configure input parameters on the left and click "Compute Prediction".
+              </div>
+              <div id="predictionContent" style="display: none;">
+                <div class="prediction-hero">
+                  <span class="pred-label">Predicted Class (<span id="predTargetName">churn</span>):</span>
+                  <span class="pred-value" id="predClassValue">—</span>
+                  <span class="pred-badge" id="predInterpretation">—</span>
+                </div>
+
+                <div class="section-divider"></div>
+                <h3 class="sub-heading">Class Probability Distribution</h3>
+                <div class="probability-bars" id="probBarsContainer"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <footer class="app-footer">
+    <div class="footer-left">
+      <span>ML Studio Engine v0.1.0</span>
+      <span class="footer-divider">·</span>
+      <span>Scikit-Learn 1.9+</span>
+      <span class="footer-divider">·</span>
+      <span>Gemini 2.5 Flash</span>
+    </div>
+    <div class="footer-right">
+      <span class="mono text-muted">Artifacts directory: outputs/</span>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
